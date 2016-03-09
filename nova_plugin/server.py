@@ -51,7 +51,6 @@ from openstack_plugin_common import (
     OPENSTACK_NAME_PROPERTY,
     COMMON_RUNTIME_PROPERTIES_KEYS,
     with_neutron_client)
-from openstack_plugin_common import cfy_one2one_simulation
 from nova_plugin.keypair import KEYPAIR_OPENSTACK_TYPE
 from openstack_plugin_common.floatingip import IP_ADDRESS_PROPERTY
 from neutron_plugin.network import NETWORK_OPENSTACK_TYPE
@@ -79,8 +78,6 @@ RUNTIME_PROPERTIES_KEYS = COMMON_RUNTIME_PROPERTIES_KEYS + \
 
 BOOT_VOLUME = 'boot_volume'
 
-_PORT_TYPE = 'cloudify.openstack.nodes.Port'
-
 
 @operation
 @with_nova_client
@@ -103,21 +100,8 @@ def create(nova_client, neutron_client, args, **kwargs):
 
     network_ids = get_openstack_ids_of_connected_nodes_by_openstack_type(
         ctx, NETWORK_OPENSTACK_TYPE)
-
-    connected_ports = \
-        cfy_one2one_simulation.retreive_grouped_related_node_instances(
-            _PORT_TYPE
-        )
-    if connected_ports:
-        retry, port_instances = \
-            cfy_one2one_simulation.simulate_node_one2one_or_retry(
-                connected_ports
-            )
-        if retry is not None:
-            return retry
-        port_ids = cfy_one2one_simulation.cfyid2osid(port_instances)
-    else:
-        port_ids = []
+    port_ids = get_openstack_ids_of_connected_nodes_by_openstack_type(
+        ctx, PORT_OPENSTACK_TYPE)
 
     external_server = use_external_resource(ctx, nova_client,
                                             SERVER_OPENSTACK_TYPE)
@@ -562,12 +546,6 @@ def disconnect_security_group(nova_client, **kwargs):
 
 @operation
 def add_bootable_volume(**kwargs):
-    retry, result = \
-        cfy_one2one_simulation.simulate_relationship_one2one_or_retry()
-    if retry is not None:
-        return retry
-    if not result:
-        return
     volume_id = ctx.target.instance.runtime_properties[OPENSTACK_ID_PROPERTY]
     ctx.source.instance.runtime_properties[BOOT_VOLUME] = volume_id
 
