@@ -39,6 +39,7 @@ INFINITE_RESOURCE_QUOTA = -1
 
 # properties
 USE_EXTERNAL_RESOURCE_PROPERTY = 'use_external_resource'
+USE_MANAGEMENT_NETWORK_PROPERTY = 'use_management_network'
 CREATE_IF_MISSING_PROPERTY = 'create_if_missing'
 
 # runtime properties
@@ -121,6 +122,11 @@ def get_relationships_by_openstack_type(ctx, type_name):
 
 def get_connected_nodes_by_openstack_type(ctx, type_name):
     return [rel.target.node
+            for rel in get_relationships_by_openstack_type(ctx, type_name)]
+
+
+def get_connected_instances_by_openstack_type(ctx, type_name):
+    return [rel.target.instance
             for rel in get_relationships_by_openstack_type(ctx, type_name)]
 
 
@@ -320,6 +326,20 @@ def delete_resource_and_runtime_properties(ctx, sugared_client,
                         'being used'.format(node_openstack_type))
 
     delete_runtime_properties(ctx, runtime_properties_keys)
+
+
+def use_management_network(ctx):
+    return use_management_network_by_properties(ctx.node.properties)
+
+
+def use_management_network_relationship(ctx):
+    return use_management_network_by_properties(ctx.target.node.properties) \
+           and use_management_network_by_properties(ctx.source.node.properties)
+
+
+def use_management_network_by_properties(properties):
+    return USE_MANAGEMENT_NETWORK_PROPERTY in properties and \
+           properties[USE_MANAGEMENT_NETWORK_PROPERTY]
 
 
 def is_external_resource(ctx):

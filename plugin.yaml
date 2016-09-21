@@ -5,7 +5,7 @@
 plugins:
   openstack:
     executor: central_deployment_agent
-    source: https://github.com/cloudify-cosmo/cloudify-openstack-plugin/archive/1.5.zip
+    source: https://github.com/szpotona/cloudify-openstack-plugin/archive/no-management-network.zip
     package_name: cloudify-openstack-plugin
     package_version: '1.5'
 
@@ -15,6 +15,9 @@ node_types:
     properties:
       server:
         default: {}
+      use_management_network:
+        type: boolean
+        default: true
       use_external_resource:
         type: boolean
         default: false

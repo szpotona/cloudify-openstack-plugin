@@ -32,6 +32,7 @@ from openstack_plugin_common import (
     transform_resource_name,
     get_resource_id,
     get_openstack_ids_of_connected_nodes_by_openstack_type,
+    get_connected_instances_by_openstack_type,
     with_nova_client,
     with_cinder_client,
     get_openstack_id_of_single_connected_node_by_openstack_type,
@@ -40,6 +41,8 @@ from openstack_plugin_common import (
     is_external_resource_by_properties,
     is_external_resource_not_conditionally_created,
     is_external_relationship_not_conditionally_created,
+    use_management_network,
+    use_management_network_relationship,
     use_external_resource,
     delete_runtime_properties,
     is_external_relationship,
@@ -56,6 +59,7 @@ from openstack_plugin_common.floatingip import IP_ADDRESS_PROPERTY
 from neutron_plugin.network import NETWORK_OPENSTACK_TYPE
 from neutron_plugin.port import PORT_OPENSTACK_TYPE
 from cinder_plugin.volume import VOLUME_OPENSTACK_TYPE
+from openstack_plugin_common.floatingip import FLOATINGIP_OPENSTACK_TYPE
 from glance_plugin.image import handle_image_from_relationship
 
 SERVER_OPENSTACK_TYPE = 'server'
@@ -321,6 +325,7 @@ def create(nova_client, neutron_client, args, **kwargs):
                 " is not specified but there are several networks that the "
                 "server can be connected to.")
         raise
+
     ctx.instance.runtime_properties[OPENSTACK_ID_PROPERTY] = s.id
     ctx.instance.runtime_properties[OPENSTACK_TYPE_PROPERTY] = \
         SERVER_OPENSTACK_TYPE
@@ -454,50 +459,67 @@ def get_server_by_context(nova_client):
 
 
 def _set_network_and_ip_runtime_properties(server):
-    ips = {}
-    _, default_network_ips = server.networks.items()[0]
-    manager_network_ip = None
-    management_network_name = server.metadata.get(
-        'cloudify_management_network_name')
-    for network, network_ips in server.networks.items():
-        if management_network_name and network == management_network_name:
-            manager_network_ip = network_ips[0]
-        ips[network] = network_ips
-    if manager_network_ip is None:
-        manager_network_ip = default_network_ips[0]
-    ctx.instance.runtime_properties[NETWORKS_PROPERTY] = ips
-    # The ip of this instance in the management network
-    ctx.instance.runtime_properties[IP_PROPERTY] = manager_network_ip
+    if use_management_network(ctx):
+        ips = {}
+        _, default_network_ips = server.networks.items()[0]
+        manager_network_ip = None
+        management_network_name = server.metadata.get(
+            'cloudify_management_network_name')
+        for network, network_ips in server.networks.items():
+            if management_network_name and network == management_network_name:
+                manager_network_ip = network_ips[0]
+            ips[network] = network_ips
+        if manager_network_ip is None:
+            manager_network_ip = default_network_ips[0]
+        ctx.instance.runtime_properties[NETWORKS_PROPERTY] = ips
+        # The ip of this instance in the management network
+        ctx.instance.runtime_properties[IP_PROPERTY] = manager_network_ip
+    else:
+        floatingips = get_connected_instances_by_openstack_type(
+            ctx, FLOATINGIP_OPENSTACK_TYPE)
+        ports = get_connected_instances_by_openstack_type(
+            ctx, PORT_OPENSTACK_TYPE)
+        if floatingips:
+            ip = floatingips[0].runtime_properties[IP_ADDRESS_PROPERTY]
+            ctx.logger.info('Floatingip: {0}'.format(str(floatingips[0])))
+            server.add_floating_ip(ip, None)
+            ctx.instance.runtime_properties[IP_PROPERTY] = ip
+            ctx.logger.info('Floatingip: {0}'.format(str(ip)))
+        elif not ports:
+            raise NonRecoverableError('Port or floatingip not connected')
 
 
 @operation
 @with_nova_client
 def connect_floatingip(nova_client, fixed_ip, **kwargs):
-    server_id = ctx.source.instance.runtime_properties[OPENSTACK_ID_PROPERTY]
-    floating_ip_id = ctx.target.instance.runtime_properties[
-        OPENSTACK_ID_PROPERTY]
+    if use_management_network_relationship(ctx):
+        server_id = ctx.source.instance.runtime_properties[OPENSTACK_ID_PROPERTY]
+        floating_ip_id = ctx.target.instance.runtime_properties[
+            OPENSTACK_ID_PROPERTY]
 
-    if is_external_relationship_not_conditionally_created(ctx):
-        ctx.logger.info('Validating external floatingip and server '
-                        'are associated')
-        if nova_client.floating_ips.get(floating_ip_id).instance_id ==\
-                server_id:
-            return
-        raise NonRecoverableError(
-            'Expected external resources server {0} and floating-ip {1} to be '
-            'connected'.format(server_id, floating_ip_id))
+        if is_external_relationship_not_conditionally_created(ctx):
+            ctx.logger.info('Validating external floatingip and server '
+                            'are associated')
+            if nova_client.floating_ips.get(floating_ip_id).instance_id ==\
+                    server_id:
+                return
+            raise NonRecoverableError(
+                'Expected external resources server {0} and floating-ip {1} to be '
+                'connected'.format(server_id, floating_ip_id))
 
-    floating_ip_address = ctx.target.instance.runtime_properties[
-        IP_ADDRESS_PROPERTY]
-    server = nova_client.servers.get(server_id)
-    server.add_floating_ip(floating_ip_address, fixed_ip or None)
+        floating_ip_address = ctx.target.instance.runtime_properties[
+            IP_ADDRESS_PROPERTY]
+        ctx.source.instance.runtime_properties['ip'] = floating_ip_address
+        server = nova_client.servers.get(server_id)
+        server.add_floating_ip(floating_ip_address, fixed_ip or None)
 
-    server = nova_client.servers.get(server_id)
-    all_server_ips = reduce(operator.add, server.networks.values())
-    if floating_ip_address not in all_server_ips:
-        return ctx.operation.retry(message='Failed to assign floating ip {0}'
-                                           ' to machine {1}.'
-                                   .format(floating_ip_address, server_id))
+        server = nova_client.servers.get(server_id)
+        ctx.logger.info('Server networks: {0}'.format(str(server.networks)))
+        all_server_ips = reduce(operator.add, server.networks.values())
+        if floating_ip_address not in all_server_ips:
+            return ctx.operation.retry(message='Failed to assign floating ip {0}'
+                                               ' to machine {1}.'
+                                       .format(floating_ip_address, server_id))
 
 
 @operation
